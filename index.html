@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pure Go Go Go</title>
+    
+    <!-- 1. IMPORT FONTS HERE (Replaced Poppins with Rubik) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Libraries -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- AlaSQL Database -->
+    <script src="https://cdn.jsdelivr.net/npm/alasql@1.7.3/dist/alasql.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        pureGreen: '#006400',
+                        pureGold: '#F2A900',
+                        errorRed: '#dc2626',
+                        lightGreen: '#4ade80',
+                    },
+                    fontFamily: { sans: ['Poppins', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #f3f4f6; height: 100vh; width: 100vw; display: flex; justify-content: center; overflow: hidden; }
+        #mobile-frame { width: 100%; max-width: 450px; height: 100%; background-color: white; position: relative; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); overflow: hidden; }
+        
+        /* Screen Switching Logic */
+        .screen { 
+            display: none !important; 
+            width: 100%; 
+            height: 100%; 
+            overflow-y: auto; 
+            padding-bottom: 90px; 
+            -webkit-overflow-scrolling: touch; 
+        }
+        .screen.active { 
+            display: flex !important; 
+            flex-direction: column;
+        } 
+        
+        /* UI Elements */
+        #reader video { object-fit: cover; width: 100% !important; height: 100% !important; border-radius: 20px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        /* Scanner Box */
+        .scan-viewport {
+            margin: 10px 20px;
+            flex: 1;
+            background: black;
+            border-radius: 24px;
+            overflow: hidden;
+            position: relative;
+            border: 2px solid #333;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        /* Reticle */
+        .reticle {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 70%; aspect-ratio: 1/1;
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            border-radius: 16px;
+            box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+        .reticle::after {
+            content: ''; position: absolute; inset: -2px;
+            border: 2px solid transparent; border-top-color: #00ff00; border-bottom-color: #00ff00;
+            border-radius: 16px; animation: scanLine 2s infinite linear;
+        }
+        @keyframes scanLine { 0% { clip-path: inset(0 0 95% 0); } 50% { clip-path: inset(95% 0 0 0); } 100% { clip-path: inset(0 0 95% 0); } }
+
+        /* Bottom Sheet */
+        .bottom-sheet {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: white; border-top-left-radius: 24px; border-top-right-radius: 24px;
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.3);
+            transform: translateY(110%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 50; padding: 24px;
+        }
+        .bottom-sheet.open { transform: translateY(0); }
+
+        /* Toast */
+        #toast {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px);
+            background: #ef4444; color: white; padding: 12px 24px; border-radius: 50px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-weight: bold; font-size: 14px;
+            transition: transform 0.3s ease-out; z-index: 100; display: flex; align-items: center; gap: 8px; white-space: nowrap;
+        }
+        #toast.show { transform: translateX(-50%) translateY(0); }
+
+        /* Toggle Switch */
+        .toggle-checkbox { appearance: none; width: 40px; height: 20px; background: #ccc; border-radius: 20px; position: relative; cursor: pointer; outline: none; }
+        .toggle-checkbox::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; transition: 0.3s; }
+        .toggle-checkbox:checked { background: #006400; }
+        .toggle-checkbox:checked::after { left: 22px; }
+
+        /* Sync Indicator */
+        #sync-status {
+            position: absolute; top: 10px; right: 10px; z-index: 60;
+            background: rgba(255,255,255,0.9); padding: 5px 10px; border-radius: 20px;
+            font-size: 10px; font-weight: bold; color: gray;
+            display: flex; align-items: center; gap: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <div id="mobile-frame">
+
+        <!-- SYNC INDICATOR -->
+        <div id="sync-status"><i class="fa-solid fa-arrows-rotate animate-spin"></i> Saving to Cloud...</div>
+
+        <!-- ERROR TOAST -->
+        <div id="toast"><i class="fa-solid fa-circle-exclamation"></i> <span id="toast-text">Item Not Found</span></div>
+
+        <!-- SPLASH SCREEN -->
+        <div id="splash-screen" class="absolute inset-0 bg-white z-[60] flex flex-col items-center justify-center transition-opacity duration-500">
+            <i class="fa-solid fa-cart-shopping text-6xl text-pureGold mb-4 animate-bounce"></i>
+            <h1 class="text-4xl font-bold text-pureGreen tracking-tighter">Pure Go Go Go</h1>
+            <p class="text-gray-500 text-xs tracking-widest uppercase mt-2">Smart Shopping. Just Go.</p>
+            <div class="w-8 h-8 border-4 border-gray-200 border-t-pureGreen rounded-full animate-spin mt-8"></div>
+        </div>
+
+        <!-- 0. AUTH SCREENS -->
+        
+        <!-- Login Screen -->
+        <section id="login-screen" class="screen active bg-white p-8 justify-center">
+            <div class="text-center mb-10 mt-auto">
+                <div class="inline-block p-4 bg-green-50 rounded-full mb-4">
+                    <i class="fa-solid fa-cart-shopping text-5xl text-pureGold"></i>
+                </div>
+                <h2 class="text-3xl font-extrabold text-pureGreen tracking-tight">Pure Go Go Go</h2>
+                <p class="text-gray-400 text-sm mt-2">Smart Shopping. Just Go.</p>
+            </div>
+
+            <div class="space-y-5 mb-auto">
+                <!-- Email Field -->
+                <div>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fa-solid fa-envelope text-gray-400"></i>
+                        </div>
+                        <input type="email" id="login-email" class="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl bg-gray-50 outline-none focus:border-pureGreen focus:ring-2 focus:ring-green-100 transition" placeholder="Email Address">
+                    </div>
+                    <p id="login-email-error" class="text-errorRed text-xs mt-1 hidden flex items-center gap-1"><i class="fa-solid fa-circle-exclamation"></i> Valid email required</p>
+                </div>
+                
+                <!-- Password Field -->
+                <div>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fa-solid fa-lock text-gray-400"></i>
+                        </div>
+                        <input type="password" id="login-pass" class="w-full pl-10 pr-10 py-3 border border-gray-200 rounded-xl bg-gray-50 outline-none focus:border-pureGreen focus:ring-2 focus:ring-green-100 transition" placeholder="Password">
+                        <div class="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-gray-400 hover:text-pureGreen" onclick="togglePassword('login-pass', this)">
+                            <i class="fa-solid fa-eye"></i>
+                        </div>
+                    </div>
+                    <p id="login-pass-error" class="text-errorRed text-xs mt-1 hidden flex items-center gap-1"><i class="fa-solid fa-circle-exclamation"></i> Password is required</p>
+                </div>
+
+                <button onclick="login()" class="w-full bg-pureGreen text-white py-4 rounded-xl font-bold shadow-lg hover:bg-green-800 transition transform active:scale-95">
+                    Log In
+                </button>
+                
+                <div class="relative flex py-2 items-center">
+                    <div class="flex-grow border-t border-gray-200"></div>
+                    <span class="flex-shrink mx-4 text-gray-400 text-xs">OR</span>
+                    <div class="flex-grow border-t border-gray-200"></div>
+                </div>
+
+                <button onclick="demoLogin()" class="w-full bg-white border-2 border-pureGold text-pureGold py-3 rounded-xl font-bold hover:bg-yellow-50 transition">
+                    Try Demo User
+                </button>
+
+                <p class="text-center text-sm text-gray-500 mt-6">
+                    New to Pure Go Go Go? <span onclick="navTo('signup-screen')" class="text-pureGreen font-bold cursor-pointer hover:underline">Create Account</span>
+                </p>
+            </div>
+        </section>
+
+        <!-- Signup Screen -->
+        <section id="signup-screen" class="screen bg-white p-8 justify-center">
+            <div class="mb-6 mt-auto">
+                <button onclick="navTo('login-screen')" class="text-gray-400 hover:text-pureGreen mb-4 font-bold flex items-center gap-2"><i class="fa-solid fa-arrow-left"></i> Back to Login</button>
+                <h2 class="text-2xl font-bold text-gray-900">Create Account</h2>
+                <p class="text-gray-500 text-sm mt-1">Join Pure Go Go Go today</p>
+            </div>
+            
+            <div class="space-y-4 mb-auto">
+                <div class="flex gap-3">
+                    <div class="w-1/2">
+                        <input type="text" id="reg-fname" class="w-full border border-gray-200 p-3 rounded-xl bg-gray-50 focus:border-pureGreen outline-none" placeholder="First Name">
+                    </div>
+                    <div class="w-1/2">
+                        <input type="text" id="reg-lname" class="w-full border border-gray-200 p-3 rounded-xl bg-gray-50 focus:border-pureGreen outline-none" placeholder="Last Name">
+                    </div>
+                </div>
+                
+                <div>
+                    <input type="email" id="reg-email" class="w-full border border-gray-200 p-3 rounded-xl bg-gray-50 focus:border-pureGreen outline-none" placeholder="Email Address">
+                    <p id="reg-email-error" class="text-errorRed text-xs mt-1 hidden"><i class="fa-solid fa-circle-exclamation"></i> Invalid Email</p>
+                </div>
+
+                <div class="relative">
+                    <input type="password" id="reg-pass" class="w-full border border-gray-200 p-3 pr-10 rounded-xl bg-gray-50 focus:border-pureGreen outline-none" placeholder="Password">
+                    <div class="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-gray-400 hover:text-pureGreen" onclick="togglePassword('reg-pass', this)">
+                        <i class="fa-solid fa-eye"></i>
+                    </div>
+                </div>
+
+                <div class="relative">
+                    <input type="password" id="reg-confirm" class="w-full border border-gray-200 p-3 pr-10 rounded-xl bg-gray-50 focus:border-pureGreen outline-none" placeholder="Confirm Password">
+                    <div class="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-gray-400 hover:text-pureGreen" onclick="togglePassword('reg-confirm', this)">
+                        <i class="fa-solid fa-eye"></i>
+                    </div>
+                </div>
+                
+                <p id="reg-general-error" class="text-errorRed text-xs text-center hidden"><i class="fa-solid fa-circle-exclamation"></i> All fields are required & passwords must match</p>
+
+                <button onclick="signup()" class="w-full bg-pureGreen text-white py-4 rounded-xl font-bold shadow-lg mt-2 hover:bg-green-800 transition active:scale-95">
+                    Sign Up
+                </button>
+            </div>
+        </section>
+
+        <!-- 1. HOME SCREEN -->
+        <section id="home-screen" class="screen bg-white p-6">
+            <header class="mt-6 mb-6 flex justify-between items-start">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">Welcome, <span id="user-name-display" class="text-pureGreen">User</span>!</h1>
+                    <!-- Points Display -->
+                    <div id="points-container" class="flex items-center gap-1 text-pureGold font-bold text-sm mt-1">
+                        <i class="fa-solid fa-coins"></i> <span id="user-points-display">0</span> pts
+                    </div>
+                </div>
+                <!-- Profile Button -->
+                <button onclick="navTo('profile-screen')" class="bg-green-50 p-3 rounded-full shadow-sm border border-green-100 text-pureGreen hover:bg-green-100 transition relative">
+                    <i class="fa-solid fa-user text-xl"></i>
+                </button>
+            </header>
+
+            <!-- Start Shopping Button -->
+            <div class="mb-8">
+                <button onclick="navTo('scan-screen')" class="w-full bg-pureGreen text-white py-4 rounded-xl font-bold shadow-lg active:scale-95 transition flex items-center justify-center gap-2 text-lg">
+                    <i class="fa-solid fa-cart-plus"></i> Start Shopping
+                </button>
+            </div>
+
+            <!-- Promos -->
+            <div class="mt-6">
+                <h3 class="font-bold text-gray-800 mb-3 flex items-center gap-2">
+                    <i class="fa-solid fa-fire text-orange-500"></i> Hot Deals
+                </h3>
+                <div id="promo-container" class="flex gap-4 overflow-x-auto pb-4 no-scrollbar"></div>
+            </div>
+
+            <!-- How To Use Tutorial (Horizontal) -->
+            <div class="mt-8">
+                <h3 class="font-bold text-gray-800 mb-4 text-lg">How It Works</h3>
+                <div class="flex justify-around items-start text-center">
+                    <!-- Step 1 -->
+                    <div class="flex flex-col items-center w-1/3">
+                        <div class="w-14 h-14 rounded-full bg-pureGreen flex items-center justify-center text-white text-2xl mb-2 shadow-md transform hover:scale-105 transition">
+                            <i class="fa-solid fa-barcode"></i>
+                        </div>
+                        <p class="font-bold text-xs text-gray-700">1. Scan Items</p>
+                    </div>
+                    <!-- Step 2 -->
+                    <div class="flex flex-col items-center w-1/3">
+                        <div class="w-14 h-14 rounded-full bg-pureGold flex items-center justify-center text-white text-xl mb-2 shadow-md transform hover:scale-105 transition">
+                            <i class="fa-solid fa-cart-shopping"></i>
+                        </div>
+                        <p class="font-bold text-xs text-gray-700">2. Review Cart</p>
+                    </div>
+                    <!-- Step 3 -->
+                    <div class="flex flex-col items-center w-1/3">
+                        <div class="w-14 h-14 rounded-full bg-lightGreen flex items-center justify-center text-white text-2xl mb-2 shadow-md transform hover:scale-105 transition">
+                            <i class="fa-solid fa-qrcode"></i>
+                        </div>
+                        <p class="font-bold text-xs text-gray-700">3. Pay & Show QR</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. PROFILE SCREEN -->
+        <section id="profile-screen" class="screen bg-gray-50">
+            <header class="bg-pureGreen text-white p-8 pb-16 rounded-b-[2.5rem] shadow-md mb-[-40px]">
+                <div class="flex justify-between items-start mb-4">
+                    <button onclick="navTo('home-screen')" class="text-white/80"><i class="fa-solid fa-arrow-left"></i></button>
+                    <button onclick="logout()" class="text-white/80 text-xs font-bold border border-white/30 px-3 py-1 rounded-full hover:bg-white/10">LOGOUT</button>
+                </div>
+                <div class="text-center">
+                    <div class="w-20 h-20 bg-white text-pureGreen rounded-full flex items-center justify-center text-3xl font-bold mx-auto shadow-lg border-4 border-green-200 mb-3">
+                        <i class="fa-solid fa-user"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold" id="profile-name">User Name</h2>
+                    <p class="text-white/80 text-sm" id="profile-email">user@example.com</p>
+                </div>
+            </header>
+
+            <div class="px-6">
+                <!-- Points Card -->
+                <div id="profile-points-card" class="bg-white p-4 rounded-2xl shadow-lg border border-gray-100 flex justify-between items-center mb-6">
+                    <div>
+                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wide">My Points</p>
+                        <h3 class="text-3xl font-bold text-pureGold mt-1" id="profile-points">0</h3>
+                    </div>
+                    <i class="fa-solid fa-coins text-4xl text-yellow-100"></i>
+                </div>
+
+                <h3 class="font-bold text-gray-800 mb-3">Transaction History</h3>
+                <div id="history-list" class="space-y-3 pb-24">
+                    <!-- History items injected here -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. SCAN SCREEN -->
+        <section id="scan-screen" class="screen bg-black p-0 relative h-full">
+            <div class="flex flex-col h-full">
+                <div class="pt-6 px-6 flex justify-between items-center z-20">
+                    <button onclick="navTo('home-screen')" class="bg-white/20 text-white w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md hover:bg-white/30 transition"><i class="fa-solid fa-xmark"></i></button>
+                    <div class="text-center"><h2 class="text-white font-bold text-lg">Scan Product</h2><p class="text-gray-400 text-xs">Align barcode in frame</p></div>
+                    <button onclick="navTo('cart-screen')" class="bg-white/20 text-white w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md hover:bg-white/30 transition relative">
+                        <i class="fa-solid fa-cart-shopping text-sm"></i>
+                        <div id="scan-cart-badge" class="absolute -top-1 -right-1 bg-pureGold text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-black hidden">0</div>
+                    </button>
+                </div>
+                <div class="scan-viewport"><div id="reader" class="w-full h-full"></div><div class="reticle"></div></div>
+                <div class="pb-8 px-6 flex justify-center relative">
+                    <button onclick="toggleManualEntry()" class="bg-white/10 text-white border border-white/20 px-6 py-3 rounded-full text-sm font-bold backdrop-blur-md hover:bg-white/20 transition flex items-center gap-2"><i class="fa-solid fa-keyboard"></i> Enter Code Manually</button>
+                </div>
+            </div>
+            <div id="manual-overlay" class="absolute top-24 left-1/2 -translate-x-1/2 w-3/4 bg-white p-4 rounded-xl shadow-xl hidden z-30">
+                <h3 class="font-bold text-gray-800 mb-2">Manual Entry</h3>
+                <input type="text" id="manual-code" placeholder="Enter Barcode ID..." class="w-full border p-3 rounded-lg mb-3 outline-none focus:border-pureGreen bg-gray-50 text-lg" onkeypress="if(event.key === 'Enter') handleManualSearch()">
+                <div class="flex gap-2"><button onclick="toggleManualEntry()" class="flex-1 py-2 text-gray-500 font-bold">Cancel</button><button onclick="handleManualSearch()" class="flex-1 bg-pureGreen text-white py-2 rounded-lg font-bold shadow-md">Search</button></div>
+            </div>
+            <div id="scan-result" class="bottom-sheet">
+                <div class="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
+                <div class="flex gap-4 mb-6">
+                    <div class="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200 overflow-hidden flex-shrink-0" id="res-img-container">
+                        <!-- Image will be injected here -->
+                        <i class="fa-solid fa-image text-gray-400 text-2xl"></i>
+                    </div>
+                    <div class="flex-1">
+                        <h3 id="res-name" class="font-bold text-lg leading-tight mb-1 text-gray-800">Product Name</h3>
+                        <div id="res-promo" class="inline-block bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded mb-1 hidden">Promo</div>
+                        <div class="mt-2"><p class="text-xs text-gray-500">Unit: <span id="res-unit-price" class="font-medium">₱0.00</span></p><p id="res-total-price" class="text-2xl font-bold text-pureGreen">₱0.00</p></div>
+                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <div class="flex items-center border border-gray-200 rounded-xl h-12 bg-gray-50">
+                        <button class="w-10 h-full text-gray-500 font-bold hover:bg-gray-200 rounded-l-xl" onclick="adjustScanQty(-1)">-</button><span id="scan-qty" class="w-8 text-center font-bold text-gray-800">1</span><button class="w-10 h-full text-gray-500 font-bold hover:bg-gray-200 rounded-r-xl" onclick="adjustScanQty(1)">+</button>
+                    </div>
+                    <button onclick="addToCartFromScan()" class="flex-1 bg-pureGreen text-white font-bold rounded-xl h-12 shadow-lg active:scale-95 transition">Add to Cart</button>
+                </div>
+                <button onclick="closeScanResult()" class="w-full text-center text-gray-400 text-sm mt-4 py-2">Cancel</button>
+            </div>
+        </section>
+
+        <!-- 4. CART SCREEN -->
+        <section id="cart-screen" class="screen bg-gray-50">
+            <header class="bg-white p-4 shadow-sm sticky top-0 z-10 flex justify-between items-center">
+                <button onclick="navTo('home-screen')" class="text-gray-400"><i class="fa-solid fa-arrow-left"></i></button>
+                <h2 class="text-xl font-bold">My Cart <span id="cart-total-count" class="text-sm font-normal text-gray-500 ml-1">(0)</span></h2>
+                <div class="w-6"></div>
+            </header>
+            <div id="cart-items-container" class="p-4 space-y-3 pb-80"></div>
+            <div class="fixed bottom-20 left-0 w-full bg-white border-t shadow-[0_-5px_20px_rgba(0,0,0,0.05)] p-4 z-20 max-w-[450px] mx-auto">
+                <div class="flex items-center gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200">
+                    <i class="fa-solid fa-coins text-pureGold"></i>
+                    <input type="number" id="points-input" placeholder="Use Points (1pt = ₱1)" class="bg-transparent text-sm outline-none w-full" oninput="renderCart()">
+                </div>
+                <div class="space-y-1 text-xs text-gray-600 mb-3">
+                    <div class="flex justify-between"><span>Subtotal (Inclusive)</span> <span id="cart-sub">₱0.00</span></div>
+                    <div class="flex justify-between text-gray-400"><span>Net of VAT</span> <span id="cart-net">₱0.00</span></div>
+                    <div class="flex justify-between text-gray-400"><span>VAT (12%)</span> <span id="cart-vat">₱0.00</span></div>
+                    <div class="flex justify-between text-red-500"><span>Less: Promo</span> <span id="cart-disc">-₱0.00</span></div>
+                    <div class="flex justify-between text-pureGold font-bold"><span>Less: Points</span> <span id="cart-points">-₱0.00</span></div>
+                    <div class="flex justify-between text-lg font-bold text-pureGreen mt-2 pt-2 border-t border-gray-200"><span>TOTAL</span> <span id="cart-final">₱0.00</span></div>
+                </div>
+                <button onclick="navTo('payment-screen')" class="w-full bg-pureGreen text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition">Proceed to Payment</button>
+            </div>
+        </section>
+
+        <!-- 5. PAYMENT SCREEN -->
+        <section id="payment-screen" class="screen bg-gray-50">
+            <div class="bg-pureGreen text-white p-6 pb-8 rounded-b-3xl shadow-md mb-6">
+                <button onclick="navTo('cart-screen')" class="text-white/80 mb-4"><i class="fa-solid fa-arrow-left"></i> Back</button>
+                <h2 class="text-2xl font-bold text-center">Payment Options</h2>
+                <div class="mt-6 bg-white/10 p-4 rounded-xl backdrop-blur-sm border border-white/20 space-y-1 text-sm text-white/90">
+                    <div class="flex justify-between"><span>Subtotal (Excl. VAT)</span> <span id="pay-sub-excl">₱0.00</span></div>
+                    <div class="flex justify-between"><span>VAT (12%)</span> <span id="pay-vat">₱0.00</span></div>
+                    <div class="flex justify-between"><span>Discounts</span> <span id="pay-disc">-₱0.00</span></div>
+                    <div class="flex justify-between text-pureGold"><span>Points</span> <span id="pay-points">-₱0.00</span></div>
+                    <div class="flex justify-between border-t border-white/20 pt-2 mt-2 text-lg font-bold text-white"><span>Amount Due</span> <span id="pay-total">₱0.00</span></div>
+                </div>
+            </div>
+            <div class="px-6 space-y-3 pb-20">
+                <button onclick="openPaymentModal('GCash')" class="w-full bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4 hover:border-blue-500 transition"><img src="https://brandlogos.net/wp-content/uploads/2024/01/gcash-logo_brandlogos.net_kiaqh-512x427.png" class="w-10 h-10 object-contain rounded-full bg-white-100"><div class="text-left flex-1"><h4 class="font-bold text-gray-800">GCash</h4></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                <button onclick="openPaymentModal('Maya')" class="w-full bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4 hover:border-green-500 transition"><img src="https://brandlogos.net/wp-content/uploads/2025/03/maya-logo_brandlogos.net_y6kkp.png" class="w-10 h-10 object-contain rounded-full bg-white-100"><div class="text-left flex-1"><h4 class="font-bold text-gray-800">Maya</h4></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                <button onclick="openPaymentModal('Card')" class="w-full bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4 hover:border-orange-500 transition"><img src="https://cdn-icons-png.flaticon.com/512/6963/6963703.png" class="w-10 h-10 object-contain rounded-full bg-white-100"><div class="text-left flex-1"><h4 class="font-bold text-gray-800">Debit / Credit Card</h4></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+                <button onclick="openPaymentModal('Cash')" class="w-full bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex items-center gap-4 hover:border-gray-500 transition"><img src="https://png.pngtree.com/png-vector/20220630/ourmid/pngtree-business-acounting-money-logo-vector-cash-logo-background-vector-png-image_37464228.png" class="w-10 h-10 object-contain rounded-full bg-white-100"><div class="text-left flex-1"><h4 class="font-bold text-gray-800">Cash</h4></div><i class="fa-solid fa-chevron-right text-gray-300"></i></button>
+            </div>
+        </section>
+
+        <!-- 6. E-RECEIPT SCREEN -->
+        <section id="receipt-screen" class="screen bg-white">
+            <div class="bg-pureGreen text-white p-4 text-center shadow-md sticky top-0 z-10">
+                <h2 class="font-bold text-lg"><i class="fa-solid fa-check-circle mr-2"></i>Payment Successful</h2>
+            </div>
+            <div class="p-6 flex flex-col items-center" id="receipt-content">
+                <div class="w-16 h-16 bg-gray-100 rounded-full mb-4 flex items-center justify-center text-gray-400"><i class="fa-solid fa-store text-2xl"></i></div>
+                <h3 class="font-bold text-xl text-gray-800">Pure Go Go Go</h3>
+                <p class="text-xs text-gray-500 mb-6" id="rec-date">--</p>
+                <div class="w-full border-t border-dashed border-gray-300 py-4 space-y-2 text-sm" id="rec-items"></div>
+                <div class="w-full border-t border-dashed border-gray-300 py-4 space-y-1 text-xs text-gray-600">
+                    <div class="flex justify-between"><span>Subtotal</span> <span id="rec-sub">₱0.00</span></div>
+                    <div class="flex justify-between"><span>VAT (12%)</span> <span id="rec-vat">₱0.00</span></div>
+                    <div class="flex justify-between"><span>Net of VAT</span> <span id="rec-net">₱0.00</span></div>
+                    <div class="flex justify-between text-red-500"><span>Discount</span> <span id="rec-disc">-₱0.00</span></div>
+                    <div class="flex justify-between text-pureGold"><span>Points</span> <span id="rec-points">-₱0.00</span></div>
+                    <div class="flex justify-between font-bold text-lg text-gray-900 mt-2 pt-2 border-t"><span>TOTAL</span> <span id="rec-total">₱0.00</span></div>
+                    <div class="flex justify-between mt-1"><span>Method</span> <span id="rec-method" class="font-bold">GCash</span></div>
+                </div>
+                <div class="bg-white p-2 border-4 border-pureGold rounded-xl mt-4"><div id="qrcode"></div></div>
+                <p class="text-xs text-gray-400 mt-2">Order ID: <span id="rec-id" class="font-mono">#--</span></p>
+            </div>
+            <div class="p-6 space-y-3">
+                <button onclick="navTo('profile-screen')" class="w-full border border-pureGreen text-pureGreen py-3 rounded-xl font-bold hover:bg-green-50">View History</button>
+                <button onclick="resetApp()" class="w-full bg-pureGreen text-white py-3 rounded-xl font-bold shadow-lg">New Transaction</button>
+            </div>
+        </section>
+
+        <!-- HISTORY DETAIL SCREEN -->
+        <section id="history-details-screen" class="screen bg-white">
+            <header class="bg-pureGreen text-white p-4 shadow-md sticky top-0 z-10 flex items-center gap-4">
+                <button onclick="navTo('profile-screen')" class="text-white"><i class="fa-solid fa-arrow-left"></i></button>
+                <h2 class="text-lg font-bold">Transaction Details</h2>
+            </header>
+            <div id="history-details-content" class="p-6 pb-24"></div>
+        </section>
+
+        <!-- PAYMENT MODALS -->
+        <div id="pay-modal" class="fixed inset-0 bg-black/80 z-[70] hidden flex items-center justify-center p-6">
+            <div class="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl transform transition-all scale-95" id="pay-modal-content"></div>
+        </div>
+
+        <!-- MAIN NAV BAR -->
+        <nav id="bottom-nav" class="absolute bottom-0 left-0 w-full bg-white h-20 border-t border-gray-200 flex justify-around items-center z-40 hidden">
+            <button onclick="navTo('home-screen')" class="flex flex-col items-center text-gray-400 hover:text-pureGreen transition group" id="nav-home">
+                <i class="fa-solid fa-house text-xl mb-1 group-[.text-pureGreen]:scale-110 transition"></i><span class="text-[10px] font-medium">Home</span>
+            </button>
+            <button onclick="navTo('scan-screen')" class="flex flex-col items-center text-gray-400 hover:text-pureGreen transition group">
+                <div class="w-12 h-12 bg-pureGreen text-white rounded-full flex items-center justify-center shadow-lg -mt-6 border-4 border-white"><i class="fa-solid fa-barcode text-xl"></i></div><span class="text-[10px] font-medium mt-1">Scan</span>
+            </button>
+            <button onclick="navTo('cart-screen')" class="flex flex-col items-center text-gray-400 hover:text-pureGreen transition group relative" id="nav-cart-btn">
+                <div id="nav-badge" class="absolute -top-1 right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full hidden">0</div>
+                <i class="fa-solid fa-cart-shopping text-xl mb-1 group-[.text-pureGreen]:scale-110 transition"></i><span class="text-[10px] font-medium">Cart</span>
+            </button>
+        </nav>
+
+    </div>
+
+    <script>
+        // --- CONFIG & STATE ---
+        // !!! IMPORTANT: REPLACE THIS URL WITH YOUR GOOGLE APPS SCRIPT WEB APP URL !!!
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyeSNczAosUpb4eyrKdpsg_SHoluoiO7ZTWEms3T8j7FrX0BwmRmaViOGaLZU_TnQ0/exec"; 
+        
+        let users = JSON.parse(localStorage.getItem('pureGoUsers')) || [];
+        let currentUser = null;
+        let cart = [];
+        let html5QrcodeScanner = null;
+        let tempScannedItem = null;
+        let scanQty = 1;
+        let isScannerRunning = false;
+        let products = [];
+
+        // --- INIT ---
+        window.onload = () => {
+            initDB();
+            // Check if splash screen was already shown in this session
+            const splashShown = sessionStorage.getItem('splashShown');
+            
+            if (!splashShown) {
+                // First time load: Show splash
+                setTimeout(() => {
+                    document.getElementById('splash-screen').classList.add('opacity-0', 'pointer-events-none');
+                    checkSession();
+                    sessionStorage.setItem('splashShown', 'true');
+                }, 2000);
+            } else {
+                // Reload: Skip splash
+                document.getElementById('splash-screen').style.display = 'none';
+                checkSession();
+            }
+        };
+
+        function initDB() {
+            alasql(`DROP TABLE IF EXISTS products`);
+            alasql(`CREATE TABLE products (product_id VARCHAR(20), item_name VARCHAR(255), price DECIMAL(10, 2), category VARCHAR(100), promo_type VARCHAR(50), promo_value VARCHAR(255), image_url VARCHAR(255))`);
+            
+            // 28 Items with Placeholders
+            alasql(`INSERT INTO products VALUES 
+                ('4807788058850', 'Unilab United Home FerSulfate Iron 65mg 100 tablets', 349.00, 'Health & Wellness', 'N/A', 'N/A', 'https://assets.unilab.com.ph/uploads/Common/Products/United-Home-Fersulfate-Iron/United_Home_Fersulfate.png'),
+                ('4807770270024', 'Lucky Me Instant Noodles Chicken 55g', 9.35, 'Instant Noodles & Pasta', '', '', 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS8kBrUToO9ZigG9NfqNh59iPamlXUGJKi6Kg&s'),
+                ('4800249908848', 'CDO Karne Norte 150g', 28.75, 'Canned Goods & Processed Meat', 'N/A', 'N/A', 'https://images.freshop.ncrcloud.com/1564405684702539926/6104e49b211569587b50b3bd5f32d422_large.png'),
+                ('4808888004167', 'Palmolive Naturals Shampoo Intensive Moisture (pink) 15ml', 79.00, 'Hair Care', 'Free Item', 'Buy 11 Get 1 FREE', 'https://down-ph.img.susercontent.com/file/ph-11134207-7rasf-m333gpousdte56.webp'),
+                ('4801668500286', 'Datu Puti Soy Sauce 385ml', 23.00, 'Seasoning & Cooking Mixes', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/bdb6b1e167f7a494e0e0633b6916ee16.webp'),
+                ('4800888285317', 'DOVE Radiant + Care Serum Bar 50x Niacinamide + Omega 6 90g', 89.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://assets.unileversolutions.com/v1/123646780.png'),
+                ('4800110099576', 'White King Fiesta Creamy Carbonara 1.4kg', 145.45, 'Instant Noodles & Pasta', 'Bundle Deal', 'Sulit Pack', 'https://ever.ph/cdn/shop/files/100000093292-Fiesta-Creamy-Carbonara-Sulit-Pack-1.4kg-231020_a2f7e6a5-0046-46e8-8587-5681602ea093.jpg'),
+                ('4800047841712', 'Zonrox Bleach Color Safe Blossom Fresh 450ml', 41.00, 'Laundry Care', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/ph-11134207-7r98z-ltqafqdyky9c66.webp'),
+                ('4800092331909', 'Ding Dong Hot and Spicy 100g', 22.15, 'Snacks', 'N/A', 'N/A', 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRKrEC0QFt0MNZEttNEx4eZLZDrxRPdywdfhA&s'),
+                ('4800216121911', 'Cheezy Red Hot 22g', 8.20, 'Snacks', 'N/A', 'N/A', 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRJIGtPXIm2r_aKmZ8_AnT7C8qqnYH79jvOUA&s'),
+                ('4800249008531', 'San Marino Chili Corned Tuna 85 g', 27.00, 'Canned Goods & Processed Meat', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/sg-11134275-8257y-mg0vcmu4tdzjd3'),
+                ('4902430846424', 'Downy Antibac Kontra Germs 26 ml', 59.00, 'Laundry Care', 'Free Item', 'Buy 6 Get 1 FREE!', 'https://img.lazcdn.com/g/p/88f4e5437da8e0510102a7d106908adf.jpg_720x720q80.jpg'),
+                ('4807770273742', 'Lucky Me! Pancit Canton Chilimansi Multipack (80gx6)', 115.00, 'Instant Noodles & Pasta', 'N/A', 'N/A', 'https://cdn.mafrservices.com/pim-content/QAT/media/product/322113/1748414403/322113_main.jpg?im=Resize=376'),
+                ('4800249010091', 'San Marino Chili Corned Tuna 100g', 29.75, 'Canned Goods & Processed Meat', 'N/A', 'N/A', 'https://ever.ph/cdn/shop/files/100000058654-San-Marino-Chili-Corned-Tuna-100g-210406_c7ec3259-e6ac-45fa-b023-a9d7cf8fd02d.jpg?'),
+                ('4806014001196', 'Good Life Japanese-Style Bread Crumbs 230g', 41.05, 'Seasoning & Cooking Mixes', 'N/A', 'N/A', 'https://acemarket.ph/cdn/shop/files/FA_GL_Pack_Refresh_Bread_Crumbs_Packshot_230g.png?'),
+                ('4806510070245', 'McCormick Grill Mates Korean BBQ Bulgogi Marinade Mix 45g', 43.00, 'Seasoning & Cooking Mixes', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/ph-11134201-7rasj-matd1lf8xfg100.webp'),
+                ('4806510070238', 'McCormick Grill Mates Cajun Marinade Mix 45g', 40.00, 'Seasoning & Cooking Mixes', 'N/A', 'N/A', 'https://ph-test-11.slatic.net/p/0c61cd2f5d7bc39a8c4b59ed4711003d.jpg'),
+                ('4809012902038', 'Facial Wash Whitening Vita', 21.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://k2pharmacy.ph/cdn/shop/files/Iwhite_FacialWashWhiteningVita1-fotor-20240621153945_grande.jpg?'),
+                ('4800326628584', 'Bigen Permanent Powder Hair Color', 75.00, 'Hair Care', 'N/A', 'N/A', 'https://medias.watsons.com.ph/publishing/Image%201_10031898%20BIGEN%20PWDR%20HAIR%20DYE%20BROWN%20BLACK-U0sPjsqF-zoom.jpg?'),
+                ('4809012902106', 'Whitening Pack Peel-off Mask', 24.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://iwhitekorea.com.ph/wp-content/uploads/2021/09/WPS1-min-600x600.jpg'),
+                ('4801668100264', 'Mang Tomas All Around Sarsa Regular (325g)', 40.00, 'Seasoning & Cooking Mixes', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/ph-11134201-7r992-lmy8cyn8qumnb2.webp'),
+                ('4806518333137', 'BELO Intense White Deo 40Ml', 165.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/ph-11134211-7qul7-lgbykf4qa1ko6b.webp'),
+                ('4806539001398', 'SOLA Daily Screen SPF 50+ PA++++ 7ml', 129.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://down-ph.img.susercontent.com/file/ph-11134207-7rash-m7a7srot6nw2cf.webp'),
+                ('4800137365326', 'MAYA The Original Hotcake Mix 500g', 77.00, 'Baking Mixes', 'N/A', 'N/A', 'https://order.themayakitchen.com/cdn/shop/products/MAYA_ORIGINAL_HOTCAKE_500G_FRONT_503x503.png?v=1646144596'),
+                ('4806014000762', 'Jolly Mushroom Whole 400g', 68.00, 'Canned Goods & Processed Meat', 'N/A', 'N/A', 'https://acemarket.ph/cdn/shop/products/E-comm-JollyWholeMushrooms-400g_cdd68763-88b3-4d59-978b-34f021d3d7b4.jpg?v=1740979475'),
+                ('4801981116171', 'Royal Soft Drink 1.75 L', 85.00, 'Ready-to-Drink Beverages', 'N/A', 'N/A', 'https://shopsuki.ph/cdn/shop/files/102051443_35dc718e-e62e-4f02-8b28-76a285c015ca_1024x.jpg?v=1757409338'),
+                ('4800047820182', 'Green Cross Isopropyl Alcohol 70% Solution 500ml', 94.00, 'Health & Hygiene', 'N/A', 'N/A', 'https://boholonlinestore.com/wp-content/uploads/2017/01/green_cross_70_isopropyl_alcohol_500ml-1.jpg'),
+                ('4800575140370', 'Alaska Evaporada 360ml', 55.00, 'Dairy & Milk', 'N/A', 'N/A', 'https://ever.ph/cdn/shop/files/9000006742-Alaska-Evaporada-Evaporated-Creamer-360ml-230525_b90b5ac9-e68f-41b7-89bc-16fcc1ea3d09.jpg?v=1762137305')
+            `);
+            renderPromos();
+        }
+
+        function renderPromos() {
+            const promos = alasql("SELECT * FROM products WHERE promo_type IS NOT NULL AND promo_type != 'N/A' AND promo_type != ''");
+            const container = document.getElementById('promo-container');
+            if (promos.length === 0) { container.innerHTML = '<p class="text-gray-400 text-xs p-2">No active promotions</p>'; return; }
+            container.innerHTML = promos.map(p => `
+                <div class="min-w-[200px] bg-green-50 border border-green-100 p-4 rounded-xl relative shadow-sm flex flex-col justify-between cursor-pointer hover:shadow-md transition" onclick="addItemByCode('${p.product_id}')">
+                    <div class="absolute top-0 right-0 bg-pureGold text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg uppercase">${p.promo_type}</div>
+                    <div class="mt-4"><h4 class="font-bold text-gray-800 leading-tight text-sm line-clamp-2">${p.item_name}</h4><p class="text-xs text-pureGreen mt-1 font-semibold">${p.promo_value}</p></div>
+                    <div class="mt-3 flex justify-between items-end"><span class="text-lg font-bold text-gray-900">₱${p.price.toFixed(2)}</span><i class="fa-solid fa-plus-circle text-pureGreen text-xl"></i></div>
+                </div>`).join('');
+        }
+
+        // --- AUTH SYSTEM ---
+        function checkSession() {
+            const storedID = localStorage.getItem('pureGoCurrentUserID');
+            if (storedID) {
+                const user = users.find(u => u.userID === storedID);
+                if (user) {
+                    currentUser = user;
+                    updateUserUI();
+                    navTo('home-screen');
+                    return;
+                }
+            }
+            navTo('login-screen');
+        }
+
+        function signup() {
+            const fname = document.getElementById('reg-fname').value.trim();
+            const lname = document.getElementById('reg-lname').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const pass = document.getElementById('reg-pass').value;
+            const confirm = document.getElementById('reg-confirm').value;
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            
+            document.getElementById('reg-general-error').classList.add('hidden');
+            document.getElementById('reg-email-error').classList.add('hidden');
+
+            if (!fname || !lname || !email || !pass || !confirm) {
+                document.getElementById('reg-general-error').classList.remove('hidden');
+                return;
+            }
+            
+            if (!emailRegex.test(email)) {
+                document.getElementById('reg-email-error').classList.remove('hidden');
+                return;
+            }
+            
+            if (pass !== confirm) {
+                 document.getElementById('reg-general-error').innerText = "Passwords do not match";
+                 document.getElementById('reg-general-error').classList.remove('hidden');
+                 return;
+            }
+            
+            if (users.some(u => u.email === email)) return showToast("Email already exists", true);
+
+            const newUser = {
+                userID: "user_" + Date.now(),
+                firstName: fname,
+                lastName: lname,
+                email: email,
+                password: pass,
+                puregoldPoints: 0,
+                transactionHistory: [],
+                isDemo: false
+            };
+            users.push(newUser);
+            saveUsers();
+            currentUser = newUser;
+            localStorage.setItem('pureGoCurrentUserID', newUser.userID);
+            updateUserUI();
+            navTo('home-screen');
+        }
+
+        function login() {
+            const email = document.getElementById('login-email').value.trim();
+            const pass = document.getElementById('login-pass').value;
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            
+            document.getElementById('login-email-error').classList.add('hidden');
+            document.getElementById('login-pass-error').classList.add('hidden');
+
+            if(!email) { document.getElementById('login-email-error').classList.remove('hidden'); return; }
+            if(!emailRegex.test(email)) { document.getElementById('login-email-error').innerText = "Invalid email format"; document.getElementById('login-email-error').classList.remove('hidden'); return; }
+            if(!pass) { document.getElementById('login-pass-error').classList.remove('hidden'); return; }
+
+            // Extract Name from Email for Demo Logic
+            const extractedName = email.split('@')[0].split('.')[0];
+            const formattedName = extractedName.charAt(0).toUpperCase() + extractedName.slice(1);
+
+            // Always succeed for demo purposes
+            let user = users.find(u => u.email === email && u.password === pass);
+            if (!user) {
+                // Create temp session user
+                user = {
+                    userID: "user_" + Date.now(),
+                    firstName: formattedName,
+                    lastName: "",
+                    email: email,
+                    password: pass,
+                    puregoldPoints: 0,
+                    transactionHistory: [],
+                    isDemo: false // Treat as real user session for points viewing
+                };
+                users.push(user); // Save so history persists for this session
+                saveUsers();
+            }
+
+            currentUser = user;
+            localStorage.setItem('pureGoCurrentUserID', user.userID);
+            updateUserUI();
+            navTo('home-screen');
+        }
+        
+        function togglePassword(fieldId, icon) {
+            const input = document.getElementById(fieldId);
+            if (input.type === "password") {
+                input.type = "text";
+                icon.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                input.type = "password";
+                icon.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        }
+
+        function demoLogin() {
+            let demoUser = users.find(u => u.email === 'demo@purego.com');
+            if(!demoUser) {
+                demoUser = {
+                    userID: "demo_123",
+                    firstName: "User",
+                    lastName: "",
+                    email: "demo@purego.com",
+                    password: "123",
+                    puregoldPoints: 50,
+                    transactionHistory: [],
+                    isDemo: true
+                };
+                users.push(demoUser);
+                saveUsers();
+            }
+            currentUser = demoUser;
+            localStorage.setItem('pureGoCurrentUserID', demoUser.userID);
+            updateUserUI();
+            navTo('home-screen');
+        }
+
+        function logout() {
+            currentUser = null;
+            localStorage.removeItem('pureGoCurrentUserID');
+            navTo('login-screen');
+        }
+
+        function saveUsers() {
+            localStorage.setItem('pureGoUsers', JSON.stringify(users));
+        }
+
+        function updateUserUI() {
+            if (!currentUser) return;
+            
+            if(currentUser.isDemo) {
+                document.getElementById('user-name-display').innerText = "User";
+                document.getElementById('points-container').classList.add('hidden');
+                document.getElementById('profile-points-card').classList.add('hidden');
+                document.getElementById('profile-name').innerText = "Demo User";
+            } else {
+                document.getElementById('user-name-display').innerText = currentUser.firstName;
+                document.getElementById('user-points-display').innerText = currentUser.puregoldPoints;
+                document.getElementById('points-container').classList.remove('hidden');
+                document.getElementById('profile-points-card').classList.remove('hidden');
+                document.getElementById('profile-name').innerText = `${currentUser.firstName} ${currentUser.lastName}`;
+                document.getElementById('profile-points').innerText = currentUser.puregoldPoints;
+            }
+            
+            document.getElementById('profile-email').innerText = currentUser.email;
+            renderHistoryList();
+        }
+
+        // --- NAVIGATION ---
+        function navTo(screenId) {
+            if (!currentUser && screenId !== 'login-screen' && screenId !== 'signup-screen') return;
+
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+            
+            if(screenId === 'scan-screen') {
+                startScanner();
+                document.getElementById('bottom-nav').classList.add('hidden');
+            } else {
+                stopScanner();
+                if(currentUser && screenId !== 'login-screen' && screenId !== 'signup-screen') {
+                    document.getElementById('bottom-nav').classList.remove('hidden');
+                } else {
+                    document.getElementById('bottom-nav').classList.add('hidden');
+                }
+            }
+
+            document.querySelectorAll('#bottom-nav button').forEach(b => b.classList.remove('text-pureGreen'));
+            if(screenId.includes('home')) document.getElementById('nav-home').classList.add('text-pureGreen');
+            if(screenId.includes('cart')) document.getElementById('nav-cart-btn').classList.add('text-pureGreen');
+
+            if(screenId === 'cart-screen') renderCart();
+            if(screenId === 'payment-screen') renderPaymentSummary();
+            if(screenId === 'history-screen') renderHistoryList();
+        }
+
+        // --- SCANNER ---
+        function startScanner() {
+            if(isScannerRunning) return;
+            if(!html5QrcodeScanner) {
+                 html5QrcodeScanner = new Html5Qrcode("reader");
+            }
+
+            html5QrcodeScanner.start(
+                { facingMode: "environment" }, 
+                { fps: 10, qrbox: { width: 250, height: 250 } }, 
+                onScanSuccess, 
+                {}
+            ).then(() => {
+                isScannerRunning = true;
+            }).catch(err => {
+                console.log("Error starting scanner:", err);
+                isScannerRunning = false;
+            });
+        }
+
+        function stopScanner() {
+            if (!html5QrcodeScanner || !isScannerRunning) return;
+
+            html5QrcodeScanner.stop().then(() => {
+                html5QrcodeScanner.clear();
+                isScannerRunning = false;
+            }).catch(err => {
+                console.log("Error stopping scanner:", err);
+                isScannerRunning = false; 
+            });
+        }
+        
+        function onScanSuccess(code) { handleBarcode(code); }
+        function toggleManualEntry() { document.getElementById('manual-overlay').classList.toggle('hidden'); }
+        function handleManualSearch() { const val = document.getElementById('manual-code').value.trim(); if(val) handleBarcode(val); }
+        function handleBarcode(code) {
+            const results = alasql("SELECT * FROM products WHERE product_id = ?", [code]);
+            if(results.length > 0) {
+                tempScannedItem = results[0]; scanQty = 1;
+                
+                const imgContainer = document.getElementById('res-img-container');
+                imgContainer.innerHTML = `<img src="${tempScannedItem.image_url}" class="w-full h-full object-cover" onerror="this.parentElement.innerHTML='<i class=\\'fa-solid fa-image text-2xl text-gray-400\\'></i>'">`;
+
+                document.getElementById('res-name').innerText = tempScannedItem.item_name;
+                document.getElementById('res-unit-price').innerText = `₱${tempScannedItem.price.toFixed(2)}`;
+                updateScanTotal();
+                document.getElementById('scan-qty').innerText = scanQty;
+                const pTag = document.getElementById('res-promo');
+                if(tempScannedItem.promo_type && tempScannedItem.promo_type !== 'N/A') { pTag.innerText = tempScannedItem.promo_type; pTag.classList.remove('hidden'); } else { pTag.classList.add('hidden'); }
+                
+                // Pause Scanner
+                if(html5QrcodeScanner && isScannerRunning) {
+                     html5QrcodeScanner.pause();
+                }
+                
+                document.getElementById('manual-overlay').classList.add('hidden');
+                document.getElementById('scan-result').classList.add('open');
+            } else { showToast("Item Not Found", true); }
+        }
+        function closeScanResult() { 
+            document.getElementById('scan-result').classList.remove('open'); 
+            if(html5QrcodeScanner && isScannerRunning) {
+                try { html5QrcodeScanner.resume(); } catch(e) { console.log(e); }
+            }
+        }
+        function adjustScanQty(delta) { scanQty += delta; if(scanQty < 1) scanQty = 1; document.getElementById('scan-qty').innerText = scanQty; updateScanTotal(); }
+        function updateScanTotal() { if(tempScannedItem) document.getElementById('res-total-price').innerText = `₱${(tempScannedItem.price * scanQty).toFixed(2)}`; }
+        function addToCartFromScan() { addItem(tempScannedItem, scanQty); closeScanResult(); showToast("Added to Cart!"); }
+        
+        function addItem(product, qty = 1) {
+            const existing = cart.find(c => c.product_id === product.product_id);
+            if(existing) existing.qty += qty; else cart.push({...product, qty: qty});
+            updateCartBadges();
+        }
+        function addItemByCode(id) {
+            const results = alasql("SELECT * FROM products WHERE product_id = ?", [id]);
+            if(results.length > 0) { addItem(results[0]); showToast("Added!"); }
+        }
+        function updateItemQty(idx, delta) {
+            cart[idx].qty += delta; if(cart[idx].qty <= 0) cart.splice(idx, 1);
+            renderCart(); updateCartBadges();
+        }
+        function updateCartBadges() {
+            const count = cart.reduce((sum, i) => sum + i.qty, 0);
+            const badges = [document.getElementById('nav-badge'), document.getElementById('scan-cart-badge')];
+            badges.forEach(b => { if(b) { b.innerText = count; b.classList.toggle('hidden', count === 0); }});
+        }
+
+        function calculateTotals() {
+            let subtotalInclusive = 0, totalPromo = 0;
+            const pointsInput = document.getElementById('points-input');
+            let points = pointsInput ? parseFloat(pointsInput.value) : 0;
+            if(isNaN(points) || (currentUser && points > currentUser.puregoldPoints)) points = 0;
+
+            cart.forEach(item => {
+                subtotalInclusive += item.price * item.qty;
+                if(item.promo_type === 'Free Item') {
+                    if(item.promo_value.includes('Buy 11')) totalPromo += Math.floor(item.qty / 12) * item.price;
+                    else if(item.promo_value.includes('Buy 6')) totalPromo += Math.floor(item.qty / 7) * item.price;
+                }
+            });
+            const netOfVat = subtotalInclusive / 1.12;
+            const vatAmt = netOfVat * 0.12;
+            const finalTotal = Math.max(0, netOfVat + vatAmt - totalPromo - points);
+            return { subtotalInclusive, netOfVat, vatAmt, totalPromo, points, finalTotal };
+        }
+
+        function renderCart() {
+            const container = document.getElementById('cart-items-container');
+            if(cart.length === 0) {
+                container.innerHTML = '<div class="text-center mt-10 text-gray-400"><i class="fa-solid fa-basket-shopping text-4xl mb-2"></i><p>Cart is empty</p></div>';
+                document.getElementById('cart-total-count').innerText = '(0)';
+                updateCartFooter({subtotalInclusive:0, vatAmt:0, netOfVat:0, totalPromo:0, points:0, finalTotal:0});
+                return;
+            }
+            document.getElementById('cart-total-count').innerText = `(${cart.length})`;
+            container.innerHTML = cart.map((item, idx) => {
+                const lineInclusive = item.price * item.qty;
+                return `
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex gap-3">
+                    <div class="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-2xl flex-shrink-0 overflow-hidden">
+                        <img src="${item.image_url}" class="w-full h-full object-cover" onerror="this.parentElement.innerHTML='<i class=\\'fa-solid fa-box\\'></i>'">
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h4 class="font-bold text-sm text-gray-800 truncate">${item.item_name}</h4>
+                        <p class="text-xs text-gray-500">₱${item.price.toFixed(2)} each</p>
+                        ${item.promo_type && item.promo_type !== 'N/A' ? `<p class="text-[10px] text-red-500 mt-1 font-bold"><i class="fa-solid fa-tag"></i> ${item.promo_value}</p>` : ''}
+                        <div class="flex justify-between items-end mt-2">
+                            <div class="flex items-center border rounded-lg h-8 bg-gray-50"><button class="w-8 h-full text-gray-600" onclick="updateItemQty(${idx}, -1)">-</button><span class="px-2 text-sm font-bold">${item.qty}</span><button class="w-8 h-full text-gray-600" onclick="updateItemQty(${idx}, 1)">+</button></div>
+                            <span class="font-bold text-pureGreen">₱${lineInclusive.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+            updateCartFooter(calculateTotals());
+        }
+
+        function updateCartFooter(t) {
+            document.getElementById('cart-sub').innerText = `₱${t.subtotalInclusive.toFixed(2)}`;
+            document.getElementById('cart-net').innerText = `₱${t.netOfVat.toFixed(2)}`;
+            document.getElementById('cart-vat').innerText = `₱${t.vatAmt.toFixed(2)}`;
+            document.getElementById('cart-disc').innerText = `-₱${t.totalPromo.toFixed(2)}`;
+            document.getElementById('cart-points').innerText = `-₱${t.points.toFixed(2)}`;
+            document.getElementById('cart-final').innerText = `₱${t.finalTotal.toFixed(2)}`;
+        }
+        function renderPaymentSummary() {
+            const t = calculateTotals();
+            document.getElementById('pay-sub-excl').innerText = `₱${t.netOfVat.toFixed(2)}`;
+            document.getElementById('pay-vat').innerText = `₱${t.vatAmt.toFixed(2)}`;
+            document.getElementById('pay-disc').innerText = `-₱${t.totalPromo.toFixed(2)}`;
+            document.getElementById('pay-points').innerText = `-₱${t.points.toFixed(2)}`;
+            document.getElementById('pay-total').innerText = `₱${t.finalTotal.toFixed(2)}`;
+        }
+
+        function openPaymentModal(method) {
+            const modal = document.getElementById('pay-modal');
+            const content = document.getElementById('pay-modal-content');
+            const totals = calculateTotals();
+            modal.classList.remove('hidden');
+            
+            let html = '';
+            if(method === 'GCash' || method === 'Maya') {
+                const color = method === 'GCash' ? 'blue' : 'green';
+                html = `
+                    <div class="p-6">
+                        <h3 class="text-xl font-bold text-${color}-600 mb-2 text-center">Pay with ${method}</h3>
+                        <div class="space-y-3">
+                            <div class="flex justify-center mb-4"><div id="payment-qr" class="p-2 bg-white border-2 border-${color}-100 rounded-lg"></div></div>
+                            <input type="text" id="pay-mobile" placeholder="+639xxxxxxxxx" required class="w-full border p-3 rounded-lg text-sm bg-gray-50">
+                            <hr class="my-4"><p class="text-xs font-bold text-gray-700 mb-2 uppercase">Confirmation Required</p>
+                            <input type="text" id="pay-ref" placeholder="Reference No. (8+ chars)" class="w-full border p-3 rounded-lg text-sm outline-none focus:border-${color}-500 mb-2">
+                            <div class="flex items-center gap-2 mt-2"><input type="checkbox" id="server-check" class="toggle-checkbox"><label for="server-check" class="text-xs text-gray-500">Simulate Server Verify Delay</label></div>
+                            <div class="flex gap-3 mt-4"><button onclick="closeModal()" class="flex-1 py-3 text-gray-500">Cancel</button><button onclick="validateGCash('${method}', ${totals.finalTotal})" class="flex-1 bg-${color}-500 text-white py-3 rounded-xl font-bold shadow-lg">Verify Payment</button></div>
+                        </div>
+                    </div>`;
+                content.innerHTML = html;
+                setTimeout(() => {
+                    new QRCode(document.getElementById("payment-qr"), { text: `${method}:${Math.random().toString(36).substring(7)}`, width: 150, height: 150, colorDark : method === 'GCash' ? "#0057e7" : "#47c02a", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.H });
+                }, 100);
+            } else if(method === 'Card') {
+                html = `
+                    <div class="p-6">
+                        <h3 class="text-xl font-bold text-orange-600 mb-4 text-center">Card Payment</h3>
+                        <form onsubmit="event.preventDefault(); validateCard();" class="space-y-3">
+                            <input id="card-num" required type="text" placeholder="Card Number (16 digits)" maxlength="16" class="w-full border p-3 rounded-lg text-sm outline-none focus:border-orange-500">
+                            <input id="card-name" required type="text" placeholder="Card Holder Name" class="w-full border p-3 rounded-lg text-sm outline-none focus:border-orange-500">
+                            <div class="flex gap-3"><input id="card-exp" required type="text" placeholder="MM/YY" maxlength="5" class="w-1/2 border p-3 rounded-lg text-sm outline-none focus:border-orange-500"><input id="card-cvv" required type="password" placeholder="CVV (3 digits)" maxlength="3" class="w-1/2 border p-3 rounded-lg text-sm outline-none focus:border-orange-500"></div>
+                            <div class="flex items-center gap-2 mt-2"><input type="checkbox" id="server-check" class="toggle-checkbox"><label for="server-check" class="text-xs text-gray-500">Simulate Server Verify Delay</label></div>
+                            <div class="flex gap-3 mt-4"><button type="button" onclick="closeModal()" class="flex-1 py-3 text-gray-500">Cancel</button><button type="submit" class="flex-1 bg-orange-500 text-white py-3 rounded-xl font-bold shadow-lg">Pay ₱${totals.finalTotal.toFixed(2)}</button></div>
+                        </form>
+                    </div>`;
+                content.innerHTML = html;
+            } else if(method === 'Cash') {
+                html = `
+                    <div class="text-center p-6">
+                        <i class="fa-solid fa-cash-register text-5xl text-gray-300 mb-4"></i><h3 class="text-xl font-bold text-gray-800 mb-2">Cash Payment</h3><p class="text-gray-500 text-sm mb-6">Pay <b>₱${totals.finalTotal.toFixed(2)}</b> at the counter.</p>
+                        <div class="bg-gray-50 p-4 rounded-lg mb-4 border border-dashed border-gray-300"><label class="text-xs font-bold text-gray-500 block mb-2">CASHIER CONFIRMATION CODE</label><input type="text" id="cash-code" placeholder="6-Digit Code" maxlength="6" class="w-full text-center text-2xl tracking-widest border p-2 rounded outline-none focus:border-pureGreen"></div>
+                        <div class="flex gap-3"><button onclick="closeModal()" class="flex-1 py-3 text-gray-500">Cancel</button><button onclick="validateCash()" class="flex-1 bg-pureGreen text-white py-3 rounded-xl font-bold shadow-lg">Confirm Payment</button></div>
+                    </div>`;
+                content.innerHTML = html;
+            }
+        }
+
+        function closeModal() { document.getElementById('pay-modal').classList.add('hidden'); }
+        function runServerDelay(cb) {
+            const chk = document.getElementById('server-check');
+            if(chk && chk.checked) {
+                const btn = document.querySelector('#pay-modal button[type="submit"]') || document.querySelector('#pay-modal button:last-child');
+                btn.innerText = "Verifying..."; btn.disabled = true;
+                setTimeout(() => cb(), 1500);
+            } else cb();
+        }
+
+        function validateGCash(method) {
+            if(!/^\+639\d{9}$/.test(document.getElementById('pay-mobile').value)) return alert("Invalid Mobile (+639...)");
+            if(document.getElementById('pay-ref').value.length < 8) return alert("Invalid Reference No.");
+            runServerDelay(() => finalizePayment(method));
+        }
+        function validateCard() {
+            if(document.getElementById('card-num').value.length !== 16) return alert("Invalid Card Number");
+            runServerDelay(() => finalizePayment('Credit Card'));
+        }
+        function validateCash() {
+            if(document.getElementById('cash-code').value.length !== 6) return alert("Invalid Cashier Code");
+            finalizePayment('Cash');
+        }
+
+        // --- GOOGLE SHEETS CONNECTION LOGIC ---
+        function sendToGoogleSheets(txn) {
+            if(!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "PASTE_YOUR_GOOGLE_SCRIPT_URL_HERE") {
+                console.log("No Google Script URL provided, skipping cloud sync.");
+                return;
+            }
+
+            // Show indicator
+            const indicator = document.getElementById('sync-status');
+            indicator.style.opacity = '1';
+            indicator.innerHTML = '<i class="fa-solid fa-arrows-rotate animate-spin"></i> Saving to Cloud...';
+
+            const payload = {
+                transactionID: txn.transactionID,
+                dateTime: txn.dateTime,
+                items: txn.itemsPurchased,
+                customerName: currentUser ? currentUser.firstName + " " + currentUser.lastName : "Guest",
+                customerEmail: currentUser ? currentUser.email : "guest@example.com",
+                finalTotal: txn.finalTotal,
+                paymentMethod: txn.paymentMethod,
+                pointsUsed: txn.puregoldPointsDeducted
+            };
+
+            fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                body: JSON.stringify(payload),
+                headers: { "Content-Type": "text/plain;charset=utf-8" }, // 'text/plain' avoids CORS preflight issues with GAS
+            })
+            .then(res => res.json())
+            .then(data => {
+                indicator.innerHTML = '<i class="fa-solid fa-check text-pureGreen"></i> Saved!';
+                setTimeout(() => { indicator.style.opacity = '0'; }, 3000);
+                console.log("Cloud Sync Success:", data);
+            })
+            .catch(error => {
+                indicator.innerHTML = '<i class="fa-solid fa-circle-exclamation text-red-500"></i> Sync Failed';
+                console.error("Cloud Sync Error:", error);
+                setTimeout(() => { indicator.style.opacity = '0'; }, 5000);
+            });
+        }
+
+        function finalizePayment(method) {
+            closeModal();
+            const t = calculateTotals();
+            const id = "#" + Math.random().toString(36).substr(2, 9).toUpperCase();
+            const date = new Date().toLocaleString();
+            const qrString = `PUREGOGO:${id}:${t.finalTotal.toFixed(2)}`;
+
+            // Create transaction object
+            const newTxn = {
+                transactionID: id,
+                dateTime: date,
+                itemsPurchased: [...cart],
+                subtotalVATExclusive: t.netOfVat,
+                VAT12: t.vatAmt,
+                discounts: t.totalPromo,
+                puregoldPointsDeducted: t.points,
+                finalTotal: t.finalTotal,
+                paymentMethod: method,
+                qrCodeData: qrString
+            };
+
+            // Update User Logic
+            if (currentUser) {
+                if (!currentUser.isDemo) {
+                    currentUser.puregoldPoints -= t.points;
+                    const pointsEarned = Math.floor(t.finalTotal / 200);
+                    currentUser.puregoldPoints += pointsEarned;
+                }
+                
+                currentUser.transactionHistory.unshift(newTxn);
+                
+                // Update Users Array
+                const idx = users.findIndex(u => u.userID === currentUser.userID);
+                if(idx !== -1) users[idx] = currentUser;
+                saveUsers();
+                updateUserUI(); // Refresh UI Points
+            }
+
+            // TRIGGER GOOGLE SHEETS SYNC HERE
+            sendToGoogleSheets(newTxn);
+
+            // Render Receipt
+            document.getElementById('rec-date').innerText = date;
+            document.getElementById('rec-id').innerText = id;
+            document.getElementById('rec-sub').innerText = `₱${t.subtotalInclusive.toFixed(2)}`;
+            document.getElementById('rec-vat').innerText = `₱${t.vatAmt.toFixed(2)}`;
+            document.getElementById('rec-net').innerText = `₱${t.netOfVat.toFixed(2)}`;
+            document.getElementById('rec-disc').innerText = `-₱${t.totalPromo.toFixed(2)}`;
+            document.getElementById('rec-points').innerText = `-₱${t.points.toFixed(2)}`;
+            document.getElementById('rec-total').innerText = `₱${t.finalTotal.toFixed(2)}`;
+            document.getElementById('rec-method').innerText = method;
+
+            document.getElementById('rec-items').innerHTML = cart.map(i => `
+                <div class="flex justify-between border-b border-dashed border-gray-200 pb-1 mb-1">
+                    <span class="truncate w-3/4">${i.item_name} x${i.qty}</span>
+                    <span>₱${(i.price * i.qty).toFixed(2)}</span>
+                </div>
+            `).join('');
+
+            document.getElementById('qrcode').innerHTML = "";
+            new QRCode(document.getElementById("qrcode"), { text: newTxn.qrCodeData, width: 150, height: 150, colorDark : "#006400", colorLight : "#ffffff" });
+
+            navTo('receipt-screen');
+            cart = [];
+            localStorage.removeItem('pureCart'); // Clear cart
+            updateCartBadges();
+        }
+
+        function renderHistoryList() {
+            const list = document.getElementById('history-list');
+            if (!currentUser || !currentUser.transactionHistory || currentUser.transactionHistory.length === 0) {
+                list.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">No transactions recorded yet.</p>';
+                return;
+            }
+            list.innerHTML = currentUser.transactionHistory.map((txn, idx) => `
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center">
+                    <div><h4 class="font-bold text-gray-800">${txn.transactionID}</h4><p class="text-xs text-gray-500">${txn.dateTime}</p><p class="text-xs font-semibold text-pureGreen mt-1">₱${txn.finalTotal.toFixed(2)} • ${txn.paymentMethod}</p></div>
+                    <button onclick="openHistoryDetails(${idx})" class="text-xs bg-gray-100 text-gray-600 px-3 py-2 rounded-lg font-bold hover:bg-gray-200">View Details</button>
+                </div>`).join('');
+        }
+
+        function openHistoryDetails(idx) {
+            const txn = currentUser.transactionHistory[idx];
+            if(!txn) return;
+            const content = document.getElementById('history-details-content');
+            content.innerHTML = `
+                <div class="text-center mb-6">
+                    <div class="w-16 h-16 bg-gray-100 rounded-full mb-3 flex items-center justify-center text-gray-400 mx-auto"><i class="fa-solid fa-store text-2xl"></i></div>
+                    <h3 class="font-bold text-xl text-gray-800">Pure Go Go Go</h3>
+                    <p class="text-xs text-gray-500">${txn.dateTime}</p>
+                    <p class="text-xs font-mono text-gray-400 mt-1">${txn.transactionID}</p>
+                </div>
+                <div class="border-t border-dashed border-gray-300 py-4 space-y-2 text-sm mb-4">${txn.itemsPurchased.map(i => `<div class="flex justify-between"><span class="truncate w-3/4">${i.item_name} x${i.qty}</span><span>₱${(i.price * i.qty).toFixed(2)}</span></div>`).join('')}</div>
+                <div class="space-y-1 text-xs text-gray-600 border-t border-dashed border-gray-300 pt-4">
+                    <div class="flex justify-between"><span>Net of VAT</span> <span>₱${txn.subtotalVATExclusive.toFixed(2)}</span></div>
+                    <div class="flex justify-between"><span>VAT (12%)</span> <span>₱${txn.VAT12.toFixed(2)}</span></div>
+                    <div class="flex justify-between text-red-500"><span>Discounts</span> <span>-₱${txn.discounts.toFixed(2)}</span></div>
+                    <div class="flex justify-between text-pureGold"><span>Points</span> <span>-₱${txn.puregoldPointsDeducted.toFixed(2)}</span></div>
+                    <div class="flex justify-between font-bold text-lg text-gray-900 mt-2 pt-2 border-t"><span>TOTAL</span> <span>₱${txn.finalTotal.toFixed(2)}</span></div>
+                    <div class="flex justify-between mt-1"><span>Payment</span> <span class="font-bold">${txn.paymentMethod}</span></div>
+                </div>
+                <div class="text-center mt-8"><div id="hist-qrcode-${idx}" class="inline-block p-2 border-4 border-gray-200 rounded-xl"></div><p class="text-xs text-gray-400 mt-2">Original Receipt QR</p></div>
+                <button onclick="navTo('history-screen')" class="w-full mt-8 border border-gray-300 text-gray-500 py-3 rounded-xl font-bold hover:bg-gray-50">Back to History</button>`;
+            navTo('history-details-screen');
+            setTimeout(() => { new QRCode(document.getElementById(`hist-qrcode-${idx}`), { text: txn.qrCodeData, width: 120, height: 120, colorDark : "#333333", colorLight : "#ffffff" }); }, 100);
+        }
+
+        function resetApp() { navTo('home-screen'); }
+        function showToast(msg, error=false) {
+            const t = document.getElementById('toast');
+            document.getElementById('toast-text').innerText = msg;
+            
+            // Set styles based on error
+            t.className = `absolute top-5 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full shadow-xl font-bold text-sm z-[100] flex items-center gap-2 ${error ? 'bg-red-500 text-white' : 'bg-pureGreen text-white'}`;
+            
+            // Show logic (Wait a tiny bit for DOM update before sliding down)
+            setTimeout(() => t.classList.add('show'), 10);
+            
+            // Hide after 3s
+            setTimeout(() => {
+                t.classList.remove('show');
+            }, 3000);
+        }
+
+        function clearHistory() {
+            if(!currentUser) return;
+            if(confirm("Clear all transaction history?")) {
+                currentUser.transactionHistory = [];
+                saveUsers();
+                renderHistoryList();
+            }
+        }
+    </script>
+</body>
+</html>
